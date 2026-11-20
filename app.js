@@ -13,7 +13,7 @@ const firebaseConfig = {
   appId: "1:187401871001:web:e13c3933dcfe6b4cace208"
 };
 // מפתח Web Push (Cloud Messaging > Web Push certificates). ריק = התראות כבויות
-const VAPID_KEY = "";
+const VAPID_KEY = "BKe0SfOaM1Ki-JsWMD7YIgG9cChebBKrmElA6KoEHtY9P22e3u_odMtoOCkI7hIbDkecMIFo3Zz1tG6WaQVy3RM";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
