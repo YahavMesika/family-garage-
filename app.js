@@ -261,7 +261,7 @@ function subscribe() {
   const slow = setTimeout(() => { if (status === 'loading') { status = 'slow'; render(); } }, 10000);
   let got = 0;
   const onErr = e => { clearTimeout(slow); console.error(e); status = e.code === 'permission-denied' ? 'denied' : 'ready'; if (status !== 'denied') toast('בעיה בטעינת הנתונים'); render(); };
-  const sub = (col, set, bit) => onSnapshot(collection(fs, col), s => {
+  const sub = (col, set, bit) => onSnapshot(collection(fs, col), { includeMetadataChanges: true }, s => {
     set(s.docs.map(d => ({ ...d.data(), id: d.id })));
     if (!s.metadata.fromCache) { got |= bit; if (got === 3) { clearTimeout(slow); status = 'ready'; } }
     else if (s.size && status === 'loading') status = 'ready';
