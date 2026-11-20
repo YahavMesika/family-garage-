@@ -78,7 +78,7 @@ function renderUser() {
   if (!user) { u.innerHTML = ''; return; }
   const nOn = notifState === 'on';
   u.innerHTML = `<span class="em">${esc(user.email)}</span>` +
-    (status !== 'denied' ? `<button class="btn sm ${nOn ? 'on' : ''}" data-act="notif">${nOn ? 'התראות פעילות ✓' : 'הפעלת התראות'}</button>` : '') +
+    (status !== 'denied' ? `<button class="btn sm ${nOn ? 'on' : ''}" data-act="notif">${nOn ? 'התראות ✓' : 'התראות'}</button>` : '') +
     `<button class="btn sm" data-act="logout">יציאה</button>`;
 }
 function render() {
@@ -180,7 +180,7 @@ async function enableNotif() {
     if (!token) throw new Error('no token');
     await setDoc(doc(fs, 'tokens', token.replace(/\//g, '_')), { token, email: user.email, device: navigator.userAgent.slice(0, 120), updated: Date.now() });
     try { localStorage.setItem('fcmToken', token); } catch (_) { }
-    notifState = 'on'; render(); toast('ההתראות הופעלו במכשיר הזה');
+    notifState = 'on'; render(); if (ov.classList.contains('on')) notifForm(); toast('ההתראות הופעלו במכשיר הזה');
   } catch (e) { console.error(e); toast('לא הצלחתי להפעיל התראות. נסו שוב.'); }
 }
 async function listenForeground() {
@@ -188,6 +188,25 @@ async function listenForeground() {
     if (!VAPID_KEY || !(await isSupported())) return;
     onMessage(getMessaging(app), p => { const d = p.data || {}; toast((d.title ? d.title + ': ' : '') + (d.body || '')); });
   } catch (_) { }
+}
+
+/* ---------- הגדרות התראות ---------- */
+const DEF = { test: [30, 7, 1], insurance: [30, 7, 1], service: [14, 3], km: 1000, hour: 9, overdue: true };
+let nset = { ...DEF };
+const LEADS = [[60, 'חודשיים'], [30, 'חודש'], [21, '3 שבועות'], [14, 'שבועיים'], [7, 'שבוע'], [3, '3 ימים'], [2, 'יומיים'], [1, 'יום לפני'], [0, 'ביום עצמו']];
+function notifForm() {
+  const row = (k, label) => `<div class="w"><div style="font-weight:700;margin-bottom:6px">${label}</div><div class="chips">${LEADS.map(([d, t]) => `<label class="chip"><input type="checkbox" name="${k}" value="${d}" ${(nset[k] || []).includes(d) ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div></div>`;
+  open(`<h2>התראות</h2>
+  <div class="note" style="${notifState === 'on' ? 'color:var(--ok)' : ''}">${notifState === 'on' ? 'ההתראות פעילות במכשיר הזה ✓' : 'ההתראות עוד לא פעילות במכשיר הזה.'} כל אחד מפעיל במכשיר שלו, וההגדרות למטה משותפות לכולם.
+  ${notifState === 'on' ? '' : '<div style="margin-top:10px"><button class="btn pri" data-act="enableNotif">הפעלת התראות במכשיר הזה</button></div>'}</div>
+  <form class="f" data-form="nset">
+  <p class="w" style="margin:0;color:var(--mut)">כמה זמן מראש לשלוח תזכורת? אפשר לסמן כמה אפשרויות.</p>
+  ${row('test', 'טסט')}${row('insurance', 'ביטוח')}${row('service', 'טיפול (לפי תאריך)')}
+  <label>תזכורת כשנשארו לטיפול (ק״מ)<input name="km" type="number" inputmode="numeric" value="${esc(nset.km)}"></label>
+  <label>שעת שליחה<select name="hour">${Array.from({ length: 16 }, (_, i) => i + 6).map(h => `<option value="${h}" ${Number(nset.hour) === h ? 'selected' : ''}>${pad(h)}:00</option>`).join('')}</select></label>
+  <label class="ck"><input type="checkbox" name="overdue" ${nset.overdue ? 'checked' : ''}> אם המועד עבר, להזכיר פעם בשבוע עד שמעדכנים</label>
+  <p class="w" style="margin:0;font-size:14px;color:var(--mut)">תזכורת לפי ק״מ נשלחת פעם בשבוע (ביום ראשון) כל עוד נשארו פחות ק״מ ממה שהגדרתם. 0 = בלי תזכורת לפי ק״מ.</p>
+  <div class="bar w"><button class="btn pri">שמירה</button><button type="button" class="btn" data-act="close">סגירה</button></div></form>`);
 }
 
 /* ---------- אירועים ---------- */
@@ -199,7 +218,8 @@ document.addEventListener('click', async e => {
     catch (err) { if (err.code === 'auth/popup-blocked' || err.code === 'auth/operation-not-supported-in-this-environment') await signInWithRedirect(auth, p); else if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') toast('ההתחברות נכשלה: ' + err.code); }
   }
   else if (a === 'logout') { await signOut(auth); }
-  else if (a === 'notif') { if (notifState === 'on') toast('ההתראות כבר פעילות במכשיר הזה'); else enableNotif(); }
+  else if (a === 'notif') notifForm();
+  else if (a === 'enableNotif') enableNotif();
   else if (a === 'newCar') carForm();
   else if (a === 'close') close();
   else if (a === 'home') { view = { name: 'home' }; render(); scrollTo(0, 0); }
@@ -220,7 +240,12 @@ document.addEventListener('submit', async e => {
   const btn = f.querySelector('.btn.pri,button:not([type])'); if (btn) btn.disabled = true;
   const car = cars.find(c => c.id === view.id);
   const by = user && (user.displayName || user.email);
-  if (f.dataset.form === 'km') {
+  if (f.dataset.form === 'nset') {
+    const L = k => fd.getAll(k).map(Number).sort((a, b) => b - a);
+    const d = { test: L('test'), insurance: L('insurance'), service: L('service'), km: n('km') === '' ? 0 : n('km'), hour: Number(g('hour')), overdue: !!fd.get('overdue'), updated: Date.now() };
+    close();
+    if (await safe(() => put('settings', 'notify', d))) toast('הגדרות ההתראות נשמרו');
+  } else if (f.dataset.form === 'km') {
     if (car && g('km') !== '' && await safe(() => put('cars', car.id, { ...strip(car), km: n('km'), kmDate: today() }))) toast('הקילומטראז׳ עודכן');
   } else if (f.dataset.form === 'car') {
     if (!g('name') && !g('tabName')) { toast('צריך שם לכרטיסייה או דגם'); if (btn) btn.disabled = false; return; }
@@ -268,6 +293,7 @@ function subscribe() {
     render();
   }, onErr);
   unsubs.push(sub('cars', v => cars = v, 1), sub('records', v => recs = v, 2));
+  unsubs.push(onSnapshot(doc(fs, 'settings', 'notify'), d => { nset = { ...DEF, ...(d.exists() ? d.data() : {}) }; }, () => { }));
 }
 onAuthStateChanged(auth, u => {
   user = u;
