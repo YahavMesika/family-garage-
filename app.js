@@ -49,18 +49,56 @@ const dtxt = d => d == null ? 'לא הוזן' : d < 0 ? `פג לפני ${-d} י�
 const toast = t => { const e = $('#toast'); e.textContent = t; e.classList.add('on'); clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove('on'), 2800); };
 const tabName = c => c.tabName || c.name || 'רכב';
 
+/* חישוב הטיפול הבא: ק״מ של הטיפול האחרון + מרווח, או תאריך הטיפול האחרון + חודשים. מה שמגיע קודם קובע */
+function svc(c) {
+  const rs = carRecs(c.id);
+  const last = rs.find(r => isService(r.types || []));
+  const every = Number(c.serviceKm) || 15000, months = Number(c.serviceMonths) || 12;
+  const kms = rs.filter(r => r.km !== '' && r.km != null).map(r => Number(r.km));
+  const cur = Math.max(Number(c.km) || 0, ...kms, 0) || null;
+  let nextKm = null, nextDate = null;
+  if (last) {
+    if (last.km !== '' && last.km != null) nextKm = Number(last.km) + every;
+    nextDate = addM(last.date, months);
+  } else {
+    nextKm = c.nextServiceKm ? Number(c.nextServiceKm) : null;
+    nextDate = c.nextServiceDate || null;
+  }
+  // קצב נסיעה ממוצע (ק״מ ליום) לפי ההיסטוריה, כדי להעריך מתי יגיעו לק״מ של הטיפול
+  const pts = rs.filter(r => r.km !== '' && r.km != null).map(r => [pd(r.date).getTime(), Number(r.km)]);
+  if (c.km && c.kmDate) pts.push([pd(c.kmDate).getTime(), Number(c.km)]);
+  pts.sort((a, b) => a[0] - b[0]);
+  const recent = pts.filter(p => p[0] >= pts[pts.length - 1]?.[0] - 3 * 365 * 864e5);
+  let rate = null;
+  if (recent.length >= 2) { const a = recent[0], b = recent[recent.length - 1]; const dd = (b[0] - a[0]) / 864e5; if (dd > 30 && b[1] > a[1]) rate = (b[1] - a[1]) / dd; }
+  const kmLeft = nextKm != null && cur != null ? nextKm - cur : null;
+  const dDate = days(nextDate);
+  const dKm = kmLeft != null && rate ? Math.round(kmLeft / rate) : null;
+  const cand = [dDate, dKm].filter(x => x != null);
+  const eff = cand.length ? Math.min(...cand) : null;
+  const by = eff == null ? null : (dKm != null && dKm === eff && (dDate == null || dKm < dDate)) ? 'km' : 'date';
+  return { last, nextKm, nextDate, kmLeft, dDate, dKm, eff, by, rate };
+}
 function items(c) {
   const t = days(c.testDate), i = days(c.insuranceDate);
-  const kl = c.nextServiceKm ? Number(c.nextServiceKm) - Number(c.km || 0) : null, sd = days(c.nextServiceDate);
+  const v = svc(c);
   let lv = 'none';
-  if (kl != null || sd != null) { lv = 'ok'; if ((kl != null && kl <= 1000) || (sd != null && sd <= 30)) lv = 'warn'; if ((kl != null && kl <= 0) || (sd != null && sd < 0)) lv = 'bad'; }
+  if (v.kmLeft != null || v.dDate != null) {
+    lv = 'ok';
+    if ((v.eff != null && v.eff <= 30) || (v.kmLeft != null && v.kmLeft <= 1000)) lv = 'warn';
+    if ((v.kmLeft != null && v.kmLeft <= 0) || (v.dDate != null && v.dDate < 0)) lv = 'bad';
+  }
   let st = 'לא הוזן';
-  if (kl != null) st = kl <= 0 ? `עבר ב-${num(-kl)} ק״מ` : `עוד ${num(kl)} ק״מ`;
-  else if (sd != null) st = dtxt(sd);
-  if (kl != null && kl > 0 && sd != null && sd < 0) st = dtxt(sd);
-  const ss = [c.nextServiceKm ? 'ב-' + fmtK(c.nextServiceKm) : '', c.nextServiceDate ? 'עד ' + fmtD(c.nextServiceDate) : ''].filter(Boolean).join(' או ');
+  if (v.kmLeft != null && v.kmLeft <= 0) st = `עבר ב-${num(-v.kmLeft)} ק״מ`;
+  else if (v.dDate != null && v.dDate < 0) st = `התאריך עבר לפני ${-v.dDate} ימים`;
+  else if (v.kmLeft != null) st = `בעוד כ-${num(v.kmLeft)} ק״מ`;
+  else if (v.dDate != null) st = dtxt(v.dDate);
+  const parts = [];
+  if (v.nextDate) parts.push(`או עד ${fmtD(v.nextDate)}`);
+  if (v.eff != null && v.eff >= 0 && lv !== 'bad') parts.push(`צפוי ${v.eff === 0 ? 'היום' : 'בעוד ' + (v.eff < 60 ? v.eff + ' ימים' : 'כ-' + Math.round(v.eff / 30.4) + ' חודשים')} (${v.by === 'km' ? 'לפי ק״מ' : 'לפי תאריך'})`);
+  if (v.nextKm) parts.unshift(`ב-${fmtK(v.nextKm)}`);
   return [
-    { k: 'טיפול הבא', lv, txt: st, sub: ss || 'הוסיפו טיפול כדי לחשב', rank: lv === 'bad' ? -1e4 : Math.min(kl != null ? kl / 50 : 1e4, sd != null ? sd : 1e4) },
+    { k: 'טיפול הבא', lv, txt: st, sub: parts.join(' · ') || 'הוסיפו טיפול כדי לחשב', rank: v.eff ?? (lv === 'bad' ? -1e4 : 1e4), eff: v.eff },
     { k: 'טסט', lv: lvl(t), txt: dtxt(t), sub: fmtD(c.testDate), rank: t ?? 1e4 },
     { k: 'ביטוח', lv: lvl(i), txt: dtxt(i), sub: fmtD(c.insuranceDate) + (c.insurer ? ' · ' + c.insurer : ''), rank: i ?? 1e4 }];
 }
@@ -109,7 +147,8 @@ function home() {
   let h = `<h2>דורש תשומת לב</h2>`;
   h += all.length ? `<div class="alerts">${all.map(a => `<button class="al ${a.lv}" data-act="open" data-id="${esc(a.c.id)}"><span class="dot"></span><span><b>${esc(tabName(a.c))}</b> · ${a.k}<br><small style="color:var(--mut)">${esc(a.sub)}</small></span><span class="when">${esc(a.txt)}</span></button>`).join('')}</div>`
     : `<div class="note" style="color:var(--ok)">הכול מעודכן. אין טסט, ביטוח או טיפול בחודש הקרוב.</div>`;
-  h += `<h2>הרכבים</h2><div class="grid">${sorted().map(c => `<button class="car" data-act="open" data-id="${esc(c.id)}"><div class="ch"><h3>${esc(tabName(c))}</h3>${plate(c.plate)}</div><div class="km">${c.tabName && c.name ? esc(c.name) + ' · ' : ''}${fmtK(c.km)}${c.muted ? ' · 🔕 בלי התראות' : ''}</div><div class="rows">${items(c).map(i => `<div class="row ${i.lv}"><span class="dot"></span><span class="k">${i.k}</span><span class="v">${esc(i.txt)}</span></div>`).join('')}</div></button>`).join('')}</div>`;
+  const bySvc = [...cars].sort((a, b) => (a.muted ? 1 : 0) - (b.muted ? 1 : 0) || (svc(a).eff ?? 1e9) - (svc(b).eff ?? 1e9));
+  h += `<h2>הרכבים <small style="font:400 14px Heebo;color:var(--mut)">לפי הטיפול הקרוב</small></h2><div class="grid">${bySvc.map(c => `<button class="car" data-act="open" data-id="${esc(c.id)}"><div class="ch"><h3>${esc(tabName(c))}</h3>${plate(c.plate)}</div><div class="km">${c.tabName && c.name ? esc(c.name) + ' · ' : ''}${fmtK(c.km)}${c.muted ? ' · 🔕 בלי התראות' : ''}</div><div class="rows">${items(c).map(i => `<div class="row ${i.lv}"><span class="dot"></span><span class="k">${i.k}</span><span class="v">${esc(i.txt)}</span></div>`).join('')}</div></button>`).join('')}</div>`;
   h += `<div class="bar" style="margin-top:30px">${imp}</div>`;
   return h;
 }
@@ -118,13 +157,14 @@ function carView(c) {
   const last = LAST.map(t => { const r = rs.find(r => has(r, t)); const part = r && r.parts && r.parts[t]; return `<div><small>${t}</small>${r ? `${fmtD(r.date)} · ${fmtK(r.km)}${part ? `<br><b style="font-weight:500">${esc(part)}</b>` : ''}` : '<span style="color:var(--mut)">אין רישום</span>'}</div>`; }).join('');
   return `<div class="ch" style="margin-top:8px"><h2 style="margin:0;font-size:clamp(26px,6vw,36px)">${esc(tabName(c))}</h2>${plate(c.plate)}</div>
   <div class="km">${[c.tabName && c.name ? esc(c.name) : '', c.year ? 'שנת ' + esc(c.year) : '', c.owner ? 'נוהג: ' + esc(c.owner) : '', c.kmDate ? 'ק״מ עודכן ' + fmtD(c.kmDate) : ''].filter(Boolean).join(' · ')}</div>
+  ${c.emails ? `<div class="km">✉️ תזכורות במייל ל: ${esc(c.emails)}</div>` : ''}
   <form class="kmup" data-form="km"><label for="kmIn">קילומטראז׳ נוכחי</label><input id="kmIn" name="km" type="number" inputmode="numeric" value="${esc(c.km)}"><button class="btn">עדכון</button></form>
   <div class="tiles" style="margin-top:14px">${items(c).map(i => `<div class="tile ${i.lv}"><small>${i.k}</small><strong>${esc(i.txt)}</strong><div class="s">${esc(i.sub)}</div></div>`).join('')}</div>
   <div class="bar"><button class="btn pri" data-act="newRec">+ טיפול חדש</button><button class="btn" data-act="editCar">עריכת פרטי רכב</button><button class="btn" data-act="mute">${c.muted ? '🔕 התראות כבויות לרכב הזה · להדליק' : '🔔 לכבות התראות לרכב הזה'}</button></div>
   ${c.notes ? `<div class="note" style="margin-top:14px;white-space:pre-wrap">${esc(c.notes)}</div>` : ''}
   <h2>טיפול אחרון לפי סוג</h2><div class="last">${last}</div>
-  <h2>היסטוריית טיפולים (${rs.length})</h2>
-  <div class="hist">${rs.length ? rs.map(r => `<div class="rec"><div class="h"><span class="d">${fmtD(r.date)}</span><span class="km">${fmtK(r.km)}</span>${r.cost ? `<span class="cost">₪${num(r.cost)}</span>` : ''}</div><div class="tags">${(r.types || []).map(t => `<span class="tag">${esc(t)}${r.parts && r.parts[t] ? `: <b style="font-weight:500">${esc(r.parts[t])}</b>` : ''}</span>`).join('')}</div>${r.garage ? `<p>מוסך: ${esc(r.garage)}</p>` : ''}${r.notes ? `<p>${esc(r.notes)}</p>` : ''}${r.by ? `<p style="font-size:13px">נרשם ע״י ${esc(r.by)}</p>` : ''}<div class="acts"><button class="btn ghost" data-act="editRec" data-id="${esc(r.id)}">עריכה</button><button class="btn ghost dan" data-act="del" data-col="records" data-id="${esc(r.id)}">מחיקה</button></div></div>`).join('') : '<div class="note">עוד לא נרשמו טיפולים לרכב הזה.</div>'}</div>
+  <h2>היסטוריית טיפולים (${rs.length})${(() => { const t = rs.reduce((a, r) => a + (Number(r.cost) || 0), 0); return t ? ` <small style="font:400 15px Heebo;color:var(--mut)">· סה״כ הוצאות ₪${num(t)}</small>` : ''; })()}</h2>
+  <div class="hist">${rs.length ? rs.map(r => `<div class="rec"><div class="h"><span class="d">${fmtD(r.date)}</span><span class="km">${fmtK(r.km)}</span>${r.cost ? `<span class="cost">עלות ₪${num(r.cost)}</span>` : ''}</div><div class="tags">${(r.types || []).map(t => `<span class="tag">${esc(t)}${r.parts && r.parts[t] ? `: <b style="font-weight:500">${esc(r.parts[t])}</b>` : ''}</span>`).join('')}</div>${r.garage ? `<p>מוסך: ${esc(r.garage)}</p>` : ''}${r.notes ? `<p>${esc(r.notes)}</p>` : ''}${r.by ? `<p style="font-size:13px">נרשם ע״י ${esc(r.by)}</p>` : ''}<div class="acts"><button class="btn ghost" data-act="editRec" data-id="${esc(r.id)}">עריכה</button><button class="btn ghost dan" data-act="del" data-col="records" data-id="${esc(r.id)}">מחיקה</button></div></div>`).join('') : '<div class="note">עוד לא נרשמו טיפולים לרכב הזה.</div>'}</div>
   <div class="bar" style="margin-top:30px"><button class="btn ghost dan" data-act="del" data-col="cars" data-id="${esc(c.id)}">מחיקת הרכב</button></div>`;
 }
 
@@ -153,19 +193,21 @@ function carForm(c) {
   ${fld('testDate', 'תוקף טסט / רישיון רכב', c.testDate, 'date')}${fld('insuranceDate', 'חידוש ביטוח', c.insuranceDate, 'date')}
   ${fld('insurer', 'חברת ביטוח / סוג', c.insurer, 'text', 'w')}
   ${fld('serviceKm', 'טיפול כל (ק״מ)', c.serviceKm, 'number')}${fld('serviceMonths', 'או כל (חודשים)', c.serviceMonths, 'number')}
-  ${fld('nextServiceKm', 'טיפול הבא ב-(ק״מ)', c.nextServiceKm, 'number')}${fld('nextServiceDate', 'טיפול הבא עד תאריך', c.nextServiceDate, 'date')}
+  ${fld('nextServiceKm', 'טיפול הבא ב-(ק״מ) · רק אם אין טיפול רשום', c.nextServiceKm, 'number')}${fld('nextServiceDate', 'טיפול הבא עד תאריך · רק אם אין טיפול רשום', c.nextServiceDate, 'date')}
+  ${fld('emails', 'מיילים לתזכורות (בני משפחה בלי האפליקציה, מופרדים בפסיק)', c.emails, 'text', 'w')}
   <label class="w">הערות (שמן מומלץ, מידות צמיגים…)<textarea name="notes">${esc(c.notes)}</textarea></label>
   <div class="bar w"><button class="btn pri">שמירה</button><button type="button" class="btn" data-act="close">ביטול</button></div></form>`);
 }
 function recForm(car, r) {
   const nw = !r; r = r || { date: today(), km: car.km || '', types: [] };
   open(`<h2>${nw ? 'טיפול חדש' : 'עריכת טיפול'} · ${esc(tabName(car))}</h2><form class="f" data-form="rec" data-id="${esc(r.id || '')}">
-  ${fld('date', 'תאריך', r.date, 'date')}${fld('km', 'קילומטראז׳ בטיפול', r.km, 'number')}
+  ${fld('date', 'תאריך', r.date, 'date')}${fld('km', 'קילומטראז׳ בזמן הטיפול', r.km, 'number')}
+  ${fld('cost', 'עלות הטיפול (₪)', r.cost, 'number')}${fld('garage', 'מוסך / מי ביצע', r.garage)}
   <div class="w"><div style="font-size:14px;color:var(--mut);margin-bottom:6px">מה נעשה</div><div class="chips">${TYPES.map(t => `<label class="chip"><input type="checkbox" name="types" value="${t}" ${(r.types || []).includes(t) ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div></div>
-  ${fld('garage', 'מוסך / מי ביצע', r.garage)}${fld('cost', 'עלות (₪)', r.cost, 'number')}
   <div class="w" id="partsBox"></div>
   <label class="w">פירוט / הערות<textarea name="notes">${esc(r.notes)}</textarea></label>
-  <label class="ck"><input type="checkbox" name="apply" ${nw ? 'checked' : ''}> לעדכן ברכב את הטיפול הבא${car.serviceKm ? ` (+${num(car.serviceKm)} ק״מ)` : ''}, ואת תוקף הטסט אם סומן טסט</label>
+  <label class="ck"><input type="checkbox" name="apply" ${nw ? 'checked' : ''}> אם סומן טסט: לחדש את תוקף הטסט בשנה</label>
+  <p class="w" style="margin:0;font-size:14px;color:var(--mut)">הטיפול הבא מחושב לבד: ק״מ הטיפול האחרון (שמן מנוע / טיפול תקופתי) + ${num(car.serviceKm || 15000)} ק״מ, או ${car.serviceMonths || 12} חודשים, מה שמגיע קודם.</p>
   <div class="bar w"><button class="btn pri">שמירה</button><button type="button" class="btn" data-act="close">ביטול</button></div></form>`);
   const f = sh.querySelector('form'), box = $('#partsBox'), vals = { ...(r.parts || {}) };
   const draw = () => {
@@ -310,7 +352,7 @@ document.addEventListener('submit', async e => {
   } else if (f.dataset.form === 'car') {
     if (!g('name') && !g('tabName')) { toast('צריך שם לכרטיסייה או דגם'); if (btn) btn.disabled = false; return; }
     const id = f.dataset.id || uid('c'), old = cars.find(c => c.id === id) || {};
-    const d = { ...strip(old), tabName: g('tabName'), name: g('name'), created: old.created || Date.now(), plate: g('plate'), year: n('year'), km: n('km'), owner: g('owner'), testDate: g('testDate'), insuranceDate: g('insuranceDate'), insurer: g('insurer'), serviceKm: n('serviceKm'), serviceMonths: n('serviceMonths'), nextServiceKm: n('nextServiceKm'), nextServiceDate: g('nextServiceDate'), notes: g('notes') };
+    const d = { ...strip(old), tabName: g('tabName'), name: g('name'), created: old.created || Date.now(), plate: g('plate'), year: n('year'), km: n('km'), owner: g('owner'), testDate: g('testDate'), insuranceDate: g('insuranceDate'), insurer: g('insurer'), serviceKm: n('serviceKm'), serviceMonths: n('serviceMonths'), nextServiceKm: n('nextServiceKm'), nextServiceDate: g('nextServiceDate'), notes: g('notes'), emails: g('emails') };
     if (d.km !== old.km) d.kmDate = today();
     const isNew = !f.dataset.id;
     close(); if (isNew) { view = { name: 'car', id }; }
@@ -328,10 +370,6 @@ document.addEventListener('submit', async e => {
       const u = { ...strip(car) }; let ch = false;
       if (r.km !== '' && r.km > (Number(car.km) || 0)) { u.km = r.km; u.kmDate = r.date; ch = true; }
       if (apply) {
-        if (isService(types)) {
-          if (r.km !== '' && car.serviceKm) { u.nextServiceKm = r.km + Number(car.serviceKm); ch = true; }
-          if (car.serviceMonths) { u.nextServiceDate = addM(r.date, Number(car.serviceMonths)); ch = true; }
-        }
         if (types.includes('טסט')) { u.testDate = addM(r.date, 12); ch = true; }
       }
       if (ch) await put('cars', car.id, u);
