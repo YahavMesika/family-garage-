@@ -88,15 +88,13 @@ function items(c) {
     if ((v.eff != null && v.eff <= 30) || (v.kmLeft != null && v.kmLeft <= 1000)) lv = 'warn';
     if ((v.kmLeft != null && v.kmLeft <= 0) || (v.dDate != null && v.dDate < 0)) lv = 'bad';
   }
-  let st = 'לא הוזן';
-  if (v.kmLeft != null && v.kmLeft <= 0) st = `עבר ב-${num(-v.kmLeft)} ק״מ`;
-  else if (v.dDate != null && v.dDate < 0) st = `התאריך עבר לפני ${-v.dDate} ימים`;
-  else if (v.kmLeft != null) st = `בעוד כ-${num(v.kmLeft)} ק״מ`;
-  else if (v.dDate != null) st = dtxt(v.dDate);
+  // שורה ראשית: "ב-X ק״מ או ב-תאריך" (ק״מ הטיפול האחרון + מרווח, תאריך הטיפול האחרון + חודשים)
+  const head = [v.nextKm ? `ב-${fmtK(v.nextKm)}` : '', v.nextDate ? `ב-${fmtD(v.nextDate)}` : ''].filter(Boolean).join(' או ');
+  const st = head || 'לא הוזן';
   const parts = [];
-  if (v.nextDate) parts.push(`או עד ${fmtD(v.nextDate)}`);
-  if (v.eff != null && v.eff >= 0 && lv !== 'bad') parts.push(`צפוי ${v.eff === 0 ? 'היום' : 'בעוד ' + (v.eff < 60 ? v.eff + ' ימים' : 'כ-' + Math.round(v.eff / 30.4) + ' חודשים')} (${v.by === 'km' ? 'לפי ק״מ' : 'לפי תאריך'})`);
-  if (v.nextKm) parts.unshift(`ב-${fmtK(v.nextKm)}`);
+  if (v.kmLeft != null) parts.push(v.kmLeft <= 0 ? `עבר ב-${num(-v.kmLeft)} ק״מ` : `נשארו כ-${num(v.kmLeft)} ק״מ`);
+  if (v.dDate != null) parts.push(v.dDate < 0 ? `התאריך עבר לפני ${-v.dDate} ימים` : v.dDate === 0 ? 'התאריך היום' : `התאריך ${dtxt(v.dDate)}`);
+  if (v.eff != null && v.eff >= 0 && lv !== 'bad' && v.by === 'km' && v.dKm != null) parts.push(`לפי קצב הנסיעה: צפוי בעוד ${v.dKm < 60 ? v.dKm + ' ימים' : 'כ-' + Math.round(v.dKm / 30.4) + ' חודשים'}`);
   return [
     { k: 'טיפול הבא', lv, txt: st, sub: parts.join(' · ') || 'הוסיפו טיפול כדי לחשב', rank: v.eff ?? (lv === 'bad' ? -1e4 : 1e4), eff: v.eff },
     { k: 'טסט', lv: lvl(t), txt: dtxt(t), sub: fmtD(c.testDate), rank: t ?? 1e4 },
