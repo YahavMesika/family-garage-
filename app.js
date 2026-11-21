@@ -1,6 +1,6 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, setDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, setDoc, deleteDoc, onSnapshot, writeBatch } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 import { getMessaging, getToken, onMessage, isSupported } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging.js';
 
 /* ---------- הגדרות הפרויקט ---------- */
@@ -24,8 +24,14 @@ catch (_) { fs = initializeFirestore(app, {}); }
 /* ---------- עזרים ---------- */
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const TYPES = ['טיפול תקופתי', 'החלפת שמן', 'מים / נוזל קירור', 'פילטרים', 'בלמים', 'צמיגים', 'מצבר', 'טסט', 'תיקון', 'אחר'];
-const LAST = ['החלפת שמן', 'מים / נוזל קירור', 'פילטרים', 'בלמים', 'צמיגים', 'מצבר'];
+const TYPES = ['טיפול תקופתי', 'שמן מנוע', 'מסנן שמן', 'מסנן אוויר', 'מסנן מזגן', 'מצתים', 'נוזל קירור', 'נוזל בלמים', 'נוזל גיר', 'בלמים / רפידות', 'צמיגים', 'מצבר', 'טסט', 'תיקון', 'אחר'];
+// פריטים שאפשר לרשום להם איזה חלק / מותג הוכנס
+const PART_TYPES = ['שמן מנוע', 'מסנן שמן', 'מסנן אוויר', 'מסנן מזגן', 'מצתים', 'נוזל קירור', 'נוזל בלמים', 'נוזל גיר', 'בלמים / רפידות', 'צמיגים', 'מצבר'];
+const LAST = ['שמן מנוע', 'מסנן שמן', 'מסנן אוויר', 'מסנן מזגן', 'מצתים', 'נוזל קירור', 'נוזל בלמים', 'נוזל גיר', 'בלמים / רפידות', 'צמיגים', 'מצבר'];
+// שמות מגרסה קודמת של האתר
+const ALIAS = { 'החלפת שמן': 'שמן מנוע', 'מים / נוזל קירור': 'נוזל קירור', 'בלמים': 'בלמים / רפידות' };
+const has = (r, t) => (r.types || []).some(x => (ALIAS[x] || x) === t) || (t === 'שמן מנוע' && (r.types || []).includes('טיפול תקופתי'));
+const isService = types => types.some(t => t === 'טיפול תקופתי' || t === 'שמן מנוע' || t === 'החלפת שמן');
 let user = null, cars = [], recs = [], status = 'loading', unsubs = [];
 let view = (() => { try { const t = localStorage.getItem('tab'); return t ? { name: 'car', id: t } : { name: 'home' }; } catch (_) { return { name: 'home' }; } })();
 const pad = n => String(n).padStart(2, '0');
@@ -58,7 +64,7 @@ function items(c) {
     { k: 'טסט', lv: lvl(t), txt: dtxt(t), sub: fmtD(c.testDate), rank: t ?? 1e4 },
     { k: 'ביטוח', lv: lvl(i), txt: dtxt(i), sub: fmtD(c.insuranceDate) + (c.insurer ? ' · ' + c.insurer : ''), rank: i ?? 1e4 }];
 }
-const worst = c => { const l = items(c).map(i => i.lv); return l.includes('bad') ? 'bad' : l.includes('warn') ? 'warn' : 'ok'; };
+const worst = c => { if (c.muted) return 'none'; const l = items(c).map(i => i.lv); return l.includes('bad') ? 'bad' : l.includes('warn') ? 'warn' : 'ok'; };
 const sorted = () => [...cars].sort((a, b) => (a.created || 0) - (b.created || 0) || tabName(a).localeCompare(tabName(b), 'he'));
 const plate = p => p ? `<span class="plate"><i>IL</i><span>${esc(p)}</span></span>` : '';
 const carRecs = id => recs.filter(r => r.carId === id).sort((a, b) => (b.date || '').localeCompare(a.date || '') || (Number(b.km) || 0) - (Number(a.km) || 0));
@@ -96,27 +102,29 @@ function render() {
   m.innerHTML = h + (c ? carView(c) : home());
 }
 function home() {
-  if (!cars.length) return `<div class="empty">${CAR_SVG}<h2 style="margin:0 0 6px;color:var(--ink)">עוד אין רכבים</h2><p>הוסיפו את הרכב הראשון: של מי הוא, מספר רישוי, קילומטראז׳, ומתי הטסט והביטוח.</p><button class="btn pri" data-act="newCar">+ הוספת רכב</button></div>`;
-  const all = []; cars.forEach(c => items(c).forEach(it => { if (it.lv === 'bad' || it.lv === 'warn') all.push({ ...it, c }); }));
+  const imp = `<label class="btn ghost" style="cursor:pointer">ייבוא נתונים מקובץ<input type="file" accept=".json,application/json" id="impFile" hidden></label>`;
+  if (!cars.length) return `<div class="empty">${CAR_SVG}<h2 style="margin:0 0 6px;color:var(--ink)">עוד אין רכבים</h2><p>הוסיפו את הרכב הראשון: של מי הוא, מספר רישוי, קילומטראז׳, ומתי הטסט והביטוח.</p><div class="bar" style="justify-content:center"><button class="btn pri" data-act="newCar">+ הוספת רכב</button>${imp}</div></div>`;
+  const all = []; cars.filter(c => !c.muted).forEach(c => items(c).forEach(it => { if (it.lv === 'bad' || it.lv === 'warn') all.push({ ...it, c }); }));
   all.sort((a, b) => (a.lv === b.lv ? 0 : a.lv === 'bad' ? -1 : 1) || a.rank - b.rank);
   let h = `<h2>דורש תשומת לב</h2>`;
   h += all.length ? `<div class="alerts">${all.map(a => `<button class="al ${a.lv}" data-act="open" data-id="${esc(a.c.id)}"><span class="dot"></span><span><b>${esc(tabName(a.c))}</b> · ${a.k}<br><small style="color:var(--mut)">${esc(a.sub)}</small></span><span class="when">${esc(a.txt)}</span></button>`).join('')}</div>`
     : `<div class="note" style="color:var(--ok)">הכול מעודכן. אין טסט, ביטוח או טיפול בחודש הקרוב.</div>`;
-  h += `<h2>הרכבים</h2><div class="grid">${sorted().map(c => `<button class="car" data-act="open" data-id="${esc(c.id)}"><div class="ch"><h3>${esc(tabName(c))}</h3>${plate(c.plate)}</div><div class="km">${c.tabName && c.name ? esc(c.name) + ' · ' : ''}${fmtK(c.km)}</div><div class="rows">${items(c).map(i => `<div class="row ${i.lv}"><span class="dot"></span><span class="k">${i.k}</span><span class="v">${esc(i.txt)}</span></div>`).join('')}</div></button>`).join('')}</div>`;
+  h += `<h2>הרכבים</h2><div class="grid">${sorted().map(c => `<button class="car" data-act="open" data-id="${esc(c.id)}"><div class="ch"><h3>${esc(tabName(c))}</h3>${plate(c.plate)}</div><div class="km">${c.tabName && c.name ? esc(c.name) + ' · ' : ''}${fmtK(c.km)}${c.muted ? ' · 🔕 בלי התראות' : ''}</div><div class="rows">${items(c).map(i => `<div class="row ${i.lv}"><span class="dot"></span><span class="k">${i.k}</span><span class="v">${esc(i.txt)}</span></div>`).join('')}</div></button>`).join('')}</div>`;
+  h += `<div class="bar" style="margin-top:30px">${imp}</div>`;
   return h;
 }
 function carView(c) {
   const rs = carRecs(c.id);
-  const last = LAST.map(t => { const r = rs.find(r => (r.types || []).includes(t) || (t === 'החלפת שמן' && (r.types || []).includes('טיפול תקופתי'))); return `<div><small>${t}</small>${r ? `${fmtD(r.date)} · ${fmtK(r.km)}` : '<span style="color:var(--mut)">אין רישום</span>'}</div>`; }).join('');
+  const last = LAST.map(t => { const r = rs.find(r => has(r, t)); const part = r && r.parts && r.parts[t]; return `<div><small>${t}</small>${r ? `${fmtD(r.date)} · ${fmtK(r.km)}${part ? `<br><b style="font-weight:500">${esc(part)}</b>` : ''}` : '<span style="color:var(--mut)">אין רישום</span>'}</div>`; }).join('');
   return `<div class="ch" style="margin-top:8px"><h2 style="margin:0;font-size:clamp(26px,6vw,36px)">${esc(tabName(c))}</h2>${plate(c.plate)}</div>
   <div class="km">${[c.tabName && c.name ? esc(c.name) : '', c.year ? 'שנת ' + esc(c.year) : '', c.owner ? 'נוהג: ' + esc(c.owner) : '', c.kmDate ? 'ק״מ עודכן ' + fmtD(c.kmDate) : ''].filter(Boolean).join(' · ')}</div>
   <form class="kmup" data-form="km"><label for="kmIn">קילומטראז׳ נוכחי</label><input id="kmIn" name="km" type="number" inputmode="numeric" value="${esc(c.km)}"><button class="btn">עדכון</button></form>
   <div class="tiles" style="margin-top:14px">${items(c).map(i => `<div class="tile ${i.lv}"><small>${i.k}</small><strong>${esc(i.txt)}</strong><div class="s">${esc(i.sub)}</div></div>`).join('')}</div>
-  <div class="bar"><button class="btn pri" data-act="newRec">+ טיפול חדש</button><button class="btn" data-act="editCar">עריכת פרטי רכב</button></div>
+  <div class="bar"><button class="btn pri" data-act="newRec">+ טיפול חדש</button><button class="btn" data-act="editCar">עריכת פרטי רכב</button><button class="btn" data-act="mute">${c.muted ? '🔕 התראות כבויות לרכב הזה · להדליק' : '🔔 לכבות התראות לרכב הזה'}</button></div>
   ${c.notes ? `<div class="note" style="margin-top:14px;white-space:pre-wrap">${esc(c.notes)}</div>` : ''}
   <h2>טיפול אחרון לפי סוג</h2><div class="last">${last}</div>
   <h2>היסטוריית טיפולים (${rs.length})</h2>
-  <div class="hist">${rs.length ? rs.map(r => `<div class="rec"><div class="h"><span class="d">${fmtD(r.date)}</span><span class="km">${fmtK(r.km)}</span>${r.cost ? `<span class="cost">₪${num(r.cost)}</span>` : ''}</div><div class="tags">${(r.types || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>${r.garage ? `<p>מוסך: ${esc(r.garage)}</p>` : ''}${r.notes ? `<p>${esc(r.notes)}</p>` : ''}${r.by ? `<p style="font-size:13px">נרשם ע״י ${esc(r.by)}</p>` : ''}<div class="acts"><button class="btn ghost" data-act="editRec" data-id="${esc(r.id)}">עריכה</button><button class="btn ghost dan" data-act="del" data-col="records" data-id="${esc(r.id)}">מחיקה</button></div></div>`).join('') : '<div class="note">עוד לא נרשמו טיפולים לרכב הזה.</div>'}</div>
+  <div class="hist">${rs.length ? rs.map(r => `<div class="rec"><div class="h"><span class="d">${fmtD(r.date)}</span><span class="km">${fmtK(r.km)}</span>${r.cost ? `<span class="cost">₪${num(r.cost)}</span>` : ''}</div><div class="tags">${(r.types || []).map(t => `<span class="tag">${esc(t)}${r.parts && r.parts[t] ? `: <b style="font-weight:500">${esc(r.parts[t])}</b>` : ''}</span>`).join('')}</div>${r.garage ? `<p>מוסך: ${esc(r.garage)}</p>` : ''}${r.notes ? `<p>${esc(r.notes)}</p>` : ''}${r.by ? `<p style="font-size:13px">נרשם ע״י ${esc(r.by)}</p>` : ''}<div class="acts"><button class="btn ghost" data-act="editRec" data-id="${esc(r.id)}">עריכה</button><button class="btn ghost dan" data-act="del" data-col="records" data-id="${esc(r.id)}">מחיקה</button></div></div>`).join('') : '<div class="note">עוד לא נרשמו טיפולים לרכב הזה.</div>'}</div>
   <div class="bar" style="margin-top:30px"><button class="btn ghost dan" data-act="del" data-col="cars" data-id="${esc(c.id)}">מחיקת הרכב</button></div>`;
 }
 
@@ -155,9 +163,18 @@ function recForm(car, r) {
   ${fld('date', 'תאריך', r.date, 'date')}${fld('km', 'קילומטראז׳ בטיפול', r.km, 'number')}
   <div class="w"><div style="font-size:14px;color:var(--mut);margin-bottom:6px">מה נעשה</div><div class="chips">${TYPES.map(t => `<label class="chip"><input type="checkbox" name="types" value="${t}" ${(r.types || []).includes(t) ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div></div>
   ${fld('garage', 'מוסך / מי ביצע', r.garage)}${fld('cost', 'עלות (₪)', r.cost, 'number')}
+  <div class="w" id="partsBox"></div>
   <label class="w">פירוט / הערות<textarea name="notes">${esc(r.notes)}</textarea></label>
   <label class="ck"><input type="checkbox" name="apply" ${nw ? 'checked' : ''}> לעדכן ברכב את הטיפול הבא${car.serviceKm ? ` (+${num(car.serviceKm)} ק״מ)` : ''}, ואת תוקף הטסט אם סומן טסט</label>
   <div class="bar w"><button class="btn pri">שמירה</button><button type="button" class="btn" data-act="close">ביטול</button></div></form>`);
+  const f = sh.querySelector('form'), box = $('#partsBox'), vals = { ...(r.parts || {}) };
+  const draw = () => {
+    box.querySelectorAll('input[data-part]').forEach(i => vals[i.dataset.part] = i.value);
+    const sel = [...f.querySelectorAll('input[name=types]:checked')].map(i => i.value).filter(t => PART_TYPES.includes(t));
+    box.innerHTML = sel.length ? `<div style="font-size:14px;color:var(--mut);margin-bottom:6px">איזה חלק / מותג הוכנס? (לא חובה)</div><div class="f" style="gap:8px">${sel.map(t => `<label>${t}<input data-part="${esc(t)}" value="${esc(vals[t] || '')}" placeholder="מותג / דגם / מק״ט"></label>`).join('')}</div>` : '';
+  };
+  f.addEventListener('change', e => { if (e.target.name === 'types') draw(); });
+  draw();
 }
 
 /* ---------- התראות ---------- */
@@ -186,8 +203,49 @@ async function enableNotif() {
 async function listenForeground() {
   try {
     if (!VAPID_KEY || !(await isSupported())) return;
-    onMessage(getMessaging(app), p => { const d = p.data || {}; toast((d.title ? d.title + ': ' : '') + (d.body || '')); });
+    onMessage(getMessaging(app), async p => {
+      const d = p.data || {};
+      toast((d.title ? d.title + ': ' : '') + (d.body || ''));
+      try { const reg = await navigator.serviceWorker.getRegistration('./firebase-messaging-sw.js'); reg && reg.showNotification(d.title || 'המוסך המשפחתי', { body: d.body || '', icon: 'icon-192.png', dir: 'rtl', lang: 'he', tag: d.tag || 'garage' }); } catch (_) { }
+    });
   } catch (_) { }
+}
+
+/* ---------- ייבוא ---------- */
+let pendingImport = null;
+document.addEventListener('change', async e => {
+  if (e.target.id !== 'impFile') return;
+  const file = e.target.files[0]; e.target.value = ''; if (!file) return;
+  try {
+    const d = JSON.parse(await file.text());
+    if (d.format !== 'family-garage' || !Array.isArray(d.cars) || !Array.isArray(d.records)) throw 0;
+    pendingImport = d;
+    const exist = d.cars.filter(c => cars.some(x => x.id === c.id)).length;
+    open(`<h2>ייבוא נתונים</h2><p>בקובץ יש <b>${d.cars.length} רכבים</b> ו־<b>${d.records.length} טיפולים</b>:</p>
+    <ul>${d.cars.map(c => `<li>${esc(c.tabName || c.name)} · ${d.records.filter(r => r.carId === c.id).length} טיפולים</li>`).join('')}</ul>
+    ${exist ? `<div class="note">${exist} מהרכבים כבר יובאו בעבר. הם יעודכנו מהקובץ ולא ישוכפלו (טיפולים שהוספתם ידנית יישארו).</div>` : ''}
+    <div class="bar"><button class="btn pri" data-act="doImport">ייבוא</button><button class="btn" data-act="close">ביטול</button></div>`);
+  } catch (_) { toast('הקובץ לא מתאים לייבוא'); }
+});
+async function doImport() {
+  const d = pendingImport; if (!d) return;
+  const btn = sh.querySelector('[data-act=doImport]'); if (btn) { btn.disabled = true; btn.textContent = 'מייבא…'; }
+  const ok = await safe(async () => {
+    const all = [...d.cars.map(c => ['cars', c]), ...d.records.map(r => ['records', r])];
+    for (let i = 0; i < all.length; i += 400) {
+      const b = writeBatch(fs);
+      for (const [col, o] of all.slice(i, i + 400)) {
+        const { id, ...rest } = o;
+        const old = col === 'cars' && cars.find(x => x.id === id);
+        // ברכב שכבר קיים: לא לדרוס שדות שמילאתם באתר (שם כרטיסייה, טסט, ביטוח…)
+        const data = old ? { ...rest, ...Object.fromEntries(Object.entries(strip(old)).filter(([, v]) => v !== '' && v != null)) } : rest;
+        b.set(doc(fs, col, id), data);
+      }
+      await b.commit();
+    }
+  });
+  pendingImport = null; close();
+  if (ok) toast(`יובאו ${d.cars.length} רכבים ו־${d.records.length} טיפולים`);
 }
 
 /* ---------- הגדרות התראות ---------- */
@@ -220,6 +278,8 @@ document.addEventListener('click', async e => {
   else if (a === 'logout') { await signOut(auth); }
   else if (a === 'notif') notifForm();
   else if (a === 'enableNotif') enableNotif();
+  else if (a === 'doImport') doImport();
+  else if (a === 'mute') { const c = cars.find(x => x.id === view.id); if (c && await safe(() => put('cars', c.id, { ...strip(c), muted: !c.muted }))) toast(c.muted ? 'ההתראות לרכב הודלקו' : 'ההתראות לרכב כובו'); }
   else if (a === 'newCar') carForm();
   else if (a === 'close') close();
   else if (a === 'home') { view = { name: 'home' }; render(); scrollTo(0, 0); }
@@ -259,7 +319,8 @@ document.addEventListener('submit', async e => {
     const types = fd.getAll('types');
     if (!g('date') || !types.length) { toast('בחרו תאריך ולפחות סוג טיפול אחד'); if (btn) btn.disabled = false; return; }
     const id = f.dataset.id || uid('r'), old = recs.find(r => r.id === id) || {};
-    const r = { ...strip(old), carId: car.id, date: g('date'), km: n('km'), types, garage: g('garage'), cost: n('cost'), notes: g('notes'), by: old.by || by || '' };
+    const parts = {}; f.querySelectorAll('input[data-part]').forEach(i => { const v = i.value.trim(); if (v && types.includes(i.dataset.part)) parts[i.dataset.part] = v; });
+    const r = { ...strip(old), carId: car.id, date: g('date'), km: n('km'), types, parts, garage: g('garage'), cost: n('cost'), notes: g('notes'), by: old.by || by || '' };
     const apply = fd.get('apply');
     close();
     if (await safe(async () => {
@@ -267,7 +328,7 @@ document.addEventListener('submit', async e => {
       const u = { ...strip(car) }; let ch = false;
       if (r.km !== '' && r.km > (Number(car.km) || 0)) { u.km = r.km; u.kmDate = r.date; ch = true; }
       if (apply) {
-        if (types.includes('טיפול תקופתי') || types.includes('החלפת שמן')) {
+        if (isService(types)) {
           if (r.km !== '' && car.serviceKm) { u.nextServiceKm = r.km + Number(car.serviceKm); ch = true; }
           if (car.serviceMonths) { u.nextServiceDate = addM(r.date, Number(car.serviceMonths)); ch = true; }
         }

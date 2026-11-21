@@ -28,6 +28,7 @@ const when = d => d < 0 ? `פג לפני ${-d} ימים` : d === 0 ? 'היום!'
 const cars = (await db.collection('cars').get()).docs.map(d => d.data());
 const lines = [];
 for (const c of cars) {
+  if (c.muted) continue; // רכב שכובו לו ההתראות
   const name = c.tabName || c.name || 'רכב';
   const check = (label, date, leads) => {
     const d = days(date);
