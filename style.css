@@ -114,3 +114,9 @@ textarea{min-height:70px;resize:vertical}
 .tabs:empty,.tabs .in:empty{display:none}
 
 .top .in>div:first-child{flex:1 1 240px}
+/* כל הכרטיסיות גלויות: שורות במקום גלילה הצידה */
+.tabs{position:static;padding-bottom:12px}
+.tabs .in{flex-wrap:wrap;overflow:visible;gap:8px}
+.tab{border-radius:999px;min-height:42px;padding:0 14px}
+.tab[aria-selected=true]{background:#fff;color:#0a4aa6}
+@media(min-width:900px){.tabs{position:sticky;top:0}}
