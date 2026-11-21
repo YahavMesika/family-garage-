@@ -60,9 +60,12 @@ function svc(c) {
   if (last) {
     if (last.km !== '' && last.km != null) nextKm = Number(last.km) + every;
     nextDate = addM(last.date, months);
-  } else {
-    nextKm = c.nextServiceKm ? Number(c.nextServiceKm) : null;
-    nextDate = c.nextServiceDate || null;
+  }
+  // שינוי ידני בעריכת רכב גובר על החישוב, עד שנרשם טיפול חדש אחריו
+  const manual = c.nextSetAt ? (!last || last.date <= c.nextSetAt) : !last;
+  if (manual) {
+    if (c.nextServiceKm !== '' && c.nextServiceKm != null) nextKm = Number(c.nextServiceKm);
+    if (c.nextServiceDate) nextDate = c.nextServiceDate;
   }
   // קצב נסיעה ממוצע (ק״מ ליום) לפי ההיסטוריה, כדי להעריך מתי יגיעו לק״מ של הטיפול
   const pts = rs.filter(r => r.km !== '' && r.km != null).map(r => [pd(r.date).getTime(), Number(r.km)]);
@@ -191,7 +194,7 @@ function carForm(c) {
   ${fld('testDate', 'תוקף טסט / רישיון רכב', c.testDate, 'date')}${fld('insuranceDate', 'חידוש ביטוח', c.insuranceDate, 'date')}
   ${fld('insurer', 'חברת ביטוח / סוג', c.insurer, 'text', 'w')}
   ${fld('serviceKm', 'טיפול כל (ק״מ)', c.serviceKm, 'number')}${fld('serviceMonths', 'או כל (חודשים)', c.serviceMonths, 'number')}
-  ${fld('nextServiceKm', 'טיפול הבא ב-(ק״מ) · רק אם אין טיפול רשום', c.nextServiceKm, 'number')}${fld('nextServiceDate', 'טיפול הבא עד תאריך · רק אם אין טיפול רשום', c.nextServiceDate, 'date')}
+  ${(() => { const v = c.id ? svc(c) : {}; const pk = v.nextKm ?? '', pdv = v.nextDate ?? ''; return `<input type="hidden" name="pk" value="${esc(pk)}"><input type="hidden" name="pdv" value="${esc(pdv)}">${fld('nextServiceKm', 'טיפול הבא ב-(ק״מ)', pk, 'number')}${fld('nextServiceDate', 'או בתאריך', pdv, 'date')}<p class="w" style="margin:0;font-size:13px;color:var(--mut)">מחושב לבד מהטיפול האחרון + המרווח. אפשר לשנות ידנית, והשינוי יישאר עד שתרשמו טיפול חדש.</p>`; })()}
   ${fld('emails', 'מיילים לתזכורות (בני משפחה בלי האפליקציה, מופרדים בפסיק)', c.emails, 'text', 'w')}
   <label class="w">הערות (שמן מומלץ, מידות צמיגים…)<textarea name="notes">${esc(c.notes)}</textarea></label>
   <div class="bar w"><button class="btn pri">שמירה</button><button type="button" class="btn" data-act="close">ביטול</button></div></form>`);
@@ -351,6 +354,8 @@ document.addEventListener('submit', async e => {
     if (!g('name') && !g('tabName')) { toast('צריך שם לכרטיסייה או דגם'); if (btn) btn.disabled = false; return; }
     const id = f.dataset.id || uid('c'), old = cars.find(c => c.id === id) || {};
     const d = { ...strip(old), tabName: g('tabName'), name: g('name'), created: old.created || Date.now(), plate: g('plate'), year: n('year'), km: n('km'), owner: g('owner'), testDate: g('testDate'), insuranceDate: g('insuranceDate'), insurer: g('insurer'), serviceKm: n('serviceKm'), serviceMonths: n('serviceMonths'), nextServiceKm: n('nextServiceKm'), nextServiceDate: g('nextServiceDate'), notes: g('notes'), emails: g('emails') };
+    // שינוי ידני של הטיפול הבא נשמר כשינוי ידני; בלי שינוי, החישוב האוטומטי ממשיך (כך שינוי מרווח משפיע מיד)
+    if (String(d.nextServiceKm) !== String(g('pk')) || d.nextServiceDate !== g('pdv')) d.nextSetAt = today();
     if (d.km !== old.km) d.kmDate = today();
     const isNew = !f.dataset.id;
     close(); if (isNew) { view = { name: 'car', id }; }
@@ -370,6 +375,7 @@ document.addEventListener('submit', async e => {
       if (apply) {
         if (types.includes('טסט')) { u.testDate = addM(r.date, 12); ch = true; }
       }
+      if (isService(types) && car.nextSetAt) { u.nextSetAt = ''; ch = true; }
       if (ch) await put('cars', car.id, u);
     })) toast('הטיפול נשמר');
   }

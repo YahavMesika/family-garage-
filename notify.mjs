@@ -35,8 +35,11 @@ function svc(c) {
   const last = rs.find(r => isService(r.types));
   const kms = rs.map(r => Number(r.km)).filter(n => n > 0);
   const cur = Math.max(Number(c.km) || 0, ...kms, 0) || null;
-  if (!last) return { nextDate: c.nextServiceDate || '', nextKm: c.nextServiceKm ? Number(c.nextServiceKm) : null, cur };
-  return { nextDate: addM(last.date, Number(c.serviceMonths) || 12), nextKm: last.km !== '' && last.km != null ? Number(last.km) + (Number(c.serviceKm) || 15000) : null, cur };
+  let nextDate = '', nextKm = null;
+  if (last) { nextDate = addM(last.date, Number(c.serviceMonths) || 12); if (last.km !== '' && last.km != null) nextKm = Number(last.km) + (Number(c.serviceKm) || 15000); }
+  const manual = c.nextSetAt ? (!last || last.date <= c.nextSetAt) : !last; // שינוי ידני מהאתר
+  if (manual) { if (c.nextServiceKm !== '' && c.nextServiceKm != null) nextKm = Number(c.nextServiceKm); if (c.nextServiceDate) nextDate = c.nextServiceDate; }
+  return { nextDate, nextKm, cur };
 }
 const lines = [];
 const perCar = []; // לכל רכב: התזכורות שלו, בשביל המיילים
